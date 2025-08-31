@@ -26,10 +26,24 @@ type Settings struct {
 	MCPServers map[string]MCPServer `json:"mcpServers"`
 }
 
+// CommandExecutor executes external commands.
+type CommandExecutor interface {
+	CommandContext(ctx context.Context, name string, arg ...string) *exec.Cmd
+}
+
+// RealCommandExecutor uses os/exec to run commands.
+type RealCommandExecutor struct{}
+
+// CommandContext creates a new command using exec.CommandContext.
+func (r *RealCommandExecutor) CommandContext(ctx context.Context, name string, arg ...string) *exec.Cmd {
+	return exec.CommandContext(ctx, name, arg...)
+}
+
 // Manager handles MCP server operations.
 type Manager struct {
 	settingsPath string
 	output       *output.Terminal
+	executor     CommandExecutor
 }
 
 // NewManager creates a new MCP manager.
@@ -38,6 +52,17 @@ func NewManager(out *output.Terminal) *Manager {
 	return &Manager{
 		settingsPath: filepath.Join(homeDir, ".claude", "settings.json"),
 		output:       out,
+		executor:     &RealCommandExecutor{},
+	}
+}
+
+// NewManagerWithExecutor creates a new MCP manager with a custom executor.
+func NewManagerWithExecutor(out *output.Terminal, executor CommandExecutor) *Manager {
+	homeDir, _ := os.UserHomeDir()
+	return &Manager{
+		settingsPath: filepath.Join(homeDir, ".claude", "settings.json"),
+		output:       out,
+		executor:     executor,
 	}
 }
 
@@ -91,7 +116,7 @@ func (m *Manager) findMCPByName(settings *Settings, name string) (string, *MCPSe
 // List shows all available MCP servers and their status.
 func (m *Manager) List(ctx context.Context) error {
 	// Just run claude mcp list and let it output directly
-	cmd := exec.CommandContext(ctx, "claude", "mcp", "list")
+	cmd := m.executor.CommandContext(ctx, "claude", "mcp", "list")
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
@@ -131,7 +156,7 @@ func (m *Manager) Enable(ctx context.Context, name string) error {
 
 	m.output.Info("Enabling MCP server '%s'...", actualName)
 
-	cmd := exec.CommandContext(ctx, "claude", args...)
+	cmd := m.executor.CommandContext(ctx, "claude", args...)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		// Check if it's already enabled
@@ -168,7 +193,7 @@ func (m *Manager) Disable(ctx context.Context, name string) error {
 func (m *Manager) removeMCP(ctx context.Context, name string) error {
 	m.output.Info("Disabling MCP server '%s'...", name)
 
-	cmd := exec.CommandContext(ctx, "claude", "mcp", "remove", name)
+	cmd := m.executor.CommandContext(ctx, "claude", "mcp", "remove", name)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		// Check if it doesn't exist
@@ -211,7 +236,7 @@ func (m *Manager) EnableAll(ctx context.Context) error {
 // DisableAll disables all MCP servers.
 func (m *Manager) DisableAll(ctx context.Context) error {
 	// Get current list of enabled MCPs
-	cmd := exec.CommandContext(ctx, "claude", "mcp", "list")
+	cmd := m.executor.CommandContext(ctx, "claude", "mcp", "list")
 	output, err := cmd.Output()
 	if err != nil {
 		return fmt.Errorf("listing MCPs: %w", err)
